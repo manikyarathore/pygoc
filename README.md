@@ -1,110 +1,111 @@
-# PyGoC — The Complete Hardest-Tier Roadmap
-### A Python-Subset Compiler Targeting Go — Full Technical Blueprint
+# PyGoC
 
-> Goal: build the strongest, most complete student compiler project realistically achievable — deep enough to be a legitimate systems project, modular enough to actually learn from, and documented well enough to defend in a viva and show off on a CV/GitHub.
+**A statically-typed Python-subset language, compiled to idiomatic Go — built entirely from scratch.**
 
----
+PyGoC is a hand-written compiler with no parser generators, no compiler-compiler tooling, and no external codegen frameworks. Every stage — lexing, parsing, type inference, semantic analysis, IR construction, optimization, and Go code generation — is implemented directly, in readable, modular Go.
 
-## 0. Project Identity
-
-**Name:** PyGoC
-**Tagline:** *A statically-typed Python-subset language ("PyGo"), compiled to idiomatic Go, built entirely from scratch — lexer through optimizer through code generator.*
-
-**Difficulty tier chosen:** Hardest realistic (not "impossible," but the ceiling of what one student can build solo in a semester with disciplined scoping).
-
-**What makes this the "hardest" version vs. the earlier medium plan:**
-- Full indentation-sensitive lexer (INDENT/DEDENT/NEWLINE) — not simplified.
-- Rich type system: `int, float, bool, string, void, list<T>, tuple<T...>, dict<K,V>, function types`.
-- Control flow: `if/elif/else`, `while`, `for ... in range(...)`, `break`, `continue`, nested loops.
-- Functions: parameters, return values (including multiple returns), recursion, nested function scopes, closures (restricted — no captured mutation, to keep semantics sane).
-- Expressions: full precedence-climbing expression grammar, unary ops, ternary (`x if cond else y`), boolean short-circuiting.
-- Collections: `list<T>`, `dict<K,V>`, `tuple<T...>` with indexing, slicing (basic), and common methods.
-- Standard library mapping layer: `fmt`, `strconv`, `strings`, `math`, `sort`, `bufio`, `errors`.
-- Real IR: three-address code (TAC) lowered into a **Control Flow Graph (CFG)** of basic blocks — not just a flat instruction list.
-- Multi-pass optimizer: constant folding, constant propagation, dead-code elimination, common subexpression elimination, algebraic simplification, and (stretch) loop-invariant code motion.
-- Full diagnostics system with **error recovery** (the compiler keeps parsing after an error to report multiple issues per run, like a real compiler) instead of stopping at the first error.
-- Golden-file end-to-end tests, benchmark suite, and a debug CLI exposing every internal stage.
+It is not trying to be GCC or LLVM. It is trying to be a **small, correct, real compiler** for a deliberately scoped language — built to the standard of craftsmanship of a serious systems project, not a toy.
 
 ---
 
-## 1. Why This Scope Is "Hardest But Feasible"
+## What is "PyGo"?
 
-| Component | Why it's hard | Why it's still finishable |
-|---|---|---|
-| Indentation lexer | Python's tokenizer algorithm has real edge cases (tabs vs spaces, blank lines, comments mid-block) | Algorithm is public, well-documented, and mechanical once understood |
-| Type system w/ generics-lite (`list<T>`) | Needs monomorphization-style reasoning without full generics | You only need *one level* of parametrization, not a general generics system |
-| CFG-based IR + optimizer | Real compilers do this; conceptually deep | You control the language, so CFGs stay small and predictable |
-| Error recovery | Naive parsers die on first error | Panic-mode recovery (skip to next statement boundary) is a known, teachable technique |
-| Closures | Genuinely hard in general | You restrict to read-only capture — cuts 80% of the complexity |
+PyGo looks like Python but is a **strict, statically-typed subset** of it. If you know Python, you already know PyGo's syntax:
 
-**Explicitly excluded even at hardest tier** (to avoid the "huge incomplete compiler" trap your original doc warned about):
-classes/OOP, exceptions (`try/except`), generators/`yield`, decorators, multiple inheritance, full dynamic typing, metaclasses, `*args`/`**kwargs`, imports/modules, async.
+```python
+def add(a: int, b: int) -> int:
+    return a + b
+
+def factorial(n: int) -> int:
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+x = add(3, 4)
+print(x)
+```
+
+Every PyGo program is type-checked at compile time, then compiled down to a standalone Go program you can `go build` and run natively — no interpreter, no runtime dependency on PyGoC itself.
+
+**Included:** variables with type inference, `int/float/bool/string`, `list<T>`, `dict<K,V>`, `tuple<T...>`, `if/elif/else`, `while`, `for ... in range(...)`, functions with recursion and multiple return values, restricted (read-only) closures, and a mapped standard library (`fmt`, `strconv`, `strings`, `math`, `sort`, `bufio`).
+
+**Deliberately excluded** (documented, not accidental — see [Scope Decisions](#scope-decisions) below): classes, exceptions, generators, decorators, full dynamic typing, `*args`/`**kwargs`, imports/modules, async.
 
 ---
 
-## 2. Repository Structure (Modular by Design)
+## Why This Project Exists
 
-Every folder = one compiler concept, one Go package, independently testable and independently *readable*. This is deliberate: you should be able to open any single folder and understand that phase without reading the rest of the compiler.
+Most "toy compiler" projects either stay so small they teach nothing, or try to be too ambitious and never finish. PyGoC is scoped deliberately at the hardest *tractable* point: a real type system, a real CFG-based IR, real multi-pass optimization, and real error recovery — without wandering into the parts of language design (classes, exceptions, dynamic typing) that turn a semester project into a multi-year one.
+
+---
+
+## Architecture — The Full Pipeline
+
+```text
+ source (.py)
+      │
+      ▼
+ ┌─────────┐   token stream (with synthesized INDENT/DEDENT/NEWLINE)
+ │  lexer  │
+ └────┬────┘
+      ▼
+ ┌─────────┐   Abstract Syntax Tree, built with panic-mode error recovery
+ │ parser  │
+ └────┬────┘
+      ▼
+ ┌───────────┐  scoped symbol table (global → function → block)
+ │  symbol   │
+ └────┬──────┘
+      ▼
+ ┌───────────┐  static type inference + operator type rules
+ │  types    │
+ └────┬──────┘
+      ▼
+ ┌───────────┐  fully validated, typed AST + diagnostics
+ │ semantic  │
+ └────┬──────┘
+      ▼
+ ┌───────────┐  three-address code lowered into a control-flow graph
+ │    ir     │
+ └────┬──────┘
+      ▼
+ ┌───────────┐  constant folding → propagation → algebraic simplification
+ │ optimizer │  → common subexpression elimination → dead code elimination
+ └────┬──────┘
+      ▼
+ ┌───────────┐  idiomatic, gofmt-clean Go source + auto-resolved imports
+ │  codegen  │
+ └────┬──────┘
+      ▼
+   go build  →  native executable
+```
+
+Every arrow above is a real package boundary in the repo — each stage only depends on the stages before it, never after. You can open any single folder and understand that phase in isolation.
+
+---
+
+## Repository Structure
 
 ```text
 pygoc/
-├── cmd/
-│   └── pygoc/                # main.go — CLI entrypoint only, no logic
+├── cmd/pygoc/            # CLI entrypoint only — no compiler logic lives here
 ├── internal/
-│   ├── lexer/                 # Phase 1: source → tokens
-│   │   ├── token.go
-│   │   ├── lexer.go
-│   │   ├── indent.go          # INDENT/DEDENT/NEWLINE logic, isolated
-│   │   └── lexer_test.go
-│   ├── ast/                   # Phase 2 data structures (no logic, just types)
-│   │   ├── expr.go
-│   │   ├── stmt.go
-│   │   └── printer.go         # AST pretty-printer for `pygoc ast` debug cmd
-│   ├── parser/                # Phase 2: tokens → AST
-│   │   ├── parser.go
-│   │   ├── expr_parser.go     # precedence climbing, isolated from statement parsing
-│   │   ├── recovery.go        # panic-mode error recovery
-│   │   └── parser_test.go
-│   ├── symbol/                # Phase 3a: scopes & symbol tables
-│   │   ├── table.go
-│   │   ├── scope.go
-│   │   └── symbol_test.go
-│   ├── types/                 # Phase 3b: type system
-│   │   ├── types.go            # Type interface + primitives
-│   │   ├── inference.go        # type inference engine
-│   │   ├── rules.go            # operator type rules (int+int→int, etc.)
-│   │   └── types_test.go
-│   ├── semantic/              # Phase 3c: semantic analysis (uses symbol + types)
-│   │   ├── analyzer.go
-│   │   ├── checks.go           # undefined vars, scope errors, return checks
-│   │   └── semantic_test.go
-│   ├── ir/                    # Phase 4: typed AST → IR
-│   │   ├── tac.go              # three-address code instruction set
-│   │   ├── cfg.go              # basic blocks + control flow graph
-│   │   ├── builder.go          # AST → IR lowering
-│   │   └── ir_test.go
-│   ├── optimizer/             # Phase 5: IR → optimized IR
-│   │   ├── constfold.go
-│   │   ├── constprop.go
-│   │   ├── deadcode.go
-│   │   ├── cse.go               # common subexpression elimination
-│   │   ├── algebraic.go
-│   │   ├── pipeline.go          # pass ordering/orchestration
-│   │   └── optimizer_test.go
-│   ├── codegen/               # Phase 6: IR → Go source
-│   │   ├── generator.go
-│   │   ├── stdlib_map.go        # PyGo builtins → Go stdlib calls
-│   │   ├── imports.go           # auto-import resolution
-│   │   └── codegen_test.go
-│   └── diagnostics/            # cross-cutting: used by every phase
-│       ├── error.go
-│       ├── reporter.go          # pretty terminal error output w/ source spans
-│       └── diagnostics_test.go
+│   ├── token/            # shared token vocabulary (used by lexer AND parser)
+│   ├── lexer/             # Phase 1 — source → tokens
+│   ├── ast/               # AST node definitions (data only, no logic)
+│   ├── parser/             # Phase 2 — tokens → AST, with error recovery
+│   ├── symbol/             # Phase 3a — scopes & symbol tables
+│   ├── types/              # Phase 3b — type system & inference
+│   ├── semantic/           # Phase 3c — validation, using symbol + types
+│   ├── ir/                 # Phase 4 — typed AST → three-address code → CFG
+│   ├── optimizer/          # Phase 5 — multi-pass CFG optimization
+│   ├── codegen/            # Phase 6 — CFG → Go source + stdlib mapping
+│   └── diagnostics/        # cross-cutting: shared error/reporting types
 ├── tests/
-│   ├── golden/                 # input.py + expected.go pairs
-│   └── e2e/                    # compile + run + check output
-├── examples/                   # showcase PyGo programs
-├── benchmarks/
+│   ├── golden/             # input.py + expected output pairs
+│   └── e2e/                 # compile + execute + verify stdout
+├── examples/                # showcase PyGo programs
+├── benchmarks/               # compiler performance benchmarks
 ├── docs/
 │   ├── language-spec.md
 │   ├── grammar.ebnf
@@ -114,356 +115,99 @@ pygoc/
 └── README.md
 ```
 
-**Design rule enforced throughout:** each `internal/X` package only imports packages *earlier* in the pipeline (parser imports lexer+ast, never the reverse). This keeps the dependency graph a straight line — mirrors the compiler pipeline itself and makes the codebase self-documenting.
+> **Design note on `internal/token/`:** token types live in their own package, separate from `lexer`, specifically so the parser can import token types without creating a circular dependency between `lexer` and `parser`.
 
 ---
 
-## 3. Full Compiler Pipeline
+## Build & Run
 
-```text
-Source (.py)
-   ↓
-[lexer]      → Token Stream (with INDENT/DEDENT/NEWLINE)
-   ↓
-[parser]     → AST (with panic-mode error recovery)
-   ↓
-[symbol]     → Scoped Symbol Table
-   ↓
-[types]      → Type Inference
-   ↓
-[semantic]   → Typed, Validated AST + Diagnostics
-   ↓
-[ir/builder] → Three-Address Code
-   ↓
-[ir/cfg]     → Control Flow Graph (basic blocks)
-   ↓
-[optimizer]  → Optimized CFG (multi-pass)
-   ↓
-[codegen]    → Go Source (+ auto imports)
-   ↓
-go build     → Executable
+Requires Go 1.22+.
+
+```bash
+git clone <your-repo-url> pygoc
+cd pygoc
+go build ./...          # build everything
+go test ./... -v        # run the full test suite
 ```
 
----
-
-## 4. Language Specification — "PyGo" (Full Feature Set)
-
-### 4.1 Types
-```text
-int, float, bool, string, void
-list<T>
-dict<K,V>
-tuple<T1,T2,...>
-function types: (T1,T2)->T3
-```
-
-### 4.2 Literals
-```python
-10          # int
-3.14        # float
-True False  # bool
-"hello"     # string
-[1,2,3]     # list<int>
-{"a":1}     # dict<string,int>
-(1,"x")     # tuple<int,string>
-```
-
-### 4.3 Operators (with defined precedence and type rules)
-```text
-Arithmetic:   + - * / % //
-Comparison:   == != < > <= >=
-Boolean:      and or not
-Unary:        - not
-Assignment:   = += -= *= /=
-```
-Full precedence table and type-promotion rules go in `docs/language-spec.md` (defined *before* the parser is written — see Phase 0 deliverable).
-
-### 4.4 Control Flow
-```python
-if cond: ... elif cond: ... else: ...
-while cond: ...
-for x in range(a, b): ...
-break
-continue
-```
-
-### 4.5 Functions
-```python
-def add(a: int, b: int) -> int:
-    return a + b
-
-def divmod2(a: int, b: int) -> (int, int):   # multiple return
-    return a // b, a % b
-```
-- Recursion supported.
-- Nested function definitions supported.
-- Closures: **read-only capture only** (a nested function may read an outer variable, not reassign it) — this is the deliberate simplification that keeps closures tractable.
-
-### 4.6 Collections
-```python
-nums = [1,2,3]
-nums.append(4)
-len(nums)
-nums[0]
-nums[1:3]          # basic slicing
-
-d = {"a": 1}
-d["b"] = 2
-
-t = (1, "x")
-a, b = t            # tuple unpacking
-```
-
-### 4.7 Builtins mapped to Go stdlib
-```text
-print()      → fmt.Println
-input()      → bufio.Scanner
-str/int/float/bool()  → strconv.*
-len()        → len()
-sorted()     → sort.*
-abs, pow, sqrt, floor → math.*
-string methods (.upper .split .join .contains) → strings.*
-```
-
-### 4.8 Ternary & comprehensions (stretch, only after core is stable)
-```python
-y = x if x > 0 else -x
-squares = [i*i for i in range(10)]
-```
-
----
-
-## 5. Grammar (Initial EBNF Sketch)
-
-```ebnf
-program        := statement* ;
-statement      := simple_stmt | compound_stmt ;
-simple_stmt    := (assign | expr_stmt | return_stmt | break | continue) NEWLINE ;
-compound_stmt  := if_stmt | while_stmt | for_stmt | func_def ;
-
-if_stmt        := "if" expr ":" block ("elif" expr ":" block)* ("else" ":" block)? ;
-while_stmt     := "while" expr ":" block ;
-for_stmt       := "for" IDENT "in" "range" "(" expr ("," expr)? ")" ":" block ;
-func_def       := "def" IDENT "(" params? ")" ("->" type)? ":" block ;
-block          := NEWLINE INDENT statement+ DEDENT ;
-
-expr           := ternary ;
-ternary        := or_expr ("if" or_expr "else" or_expr)? ;
-or_expr        := and_expr ("or" and_expr)* ;
-and_expr       := not_expr ("and" not_expr)* ;
-not_expr       := "not" not_expr | comparison ;
-comparison     := arith (("==" | "!=" | "<" | ">" | "<=" | ">=") arith)* ;
-arith          := term (("+" | "-") term)* ;
-term           := unary (("*" | "/" | "%" | "//") unary)* ;
-unary          := "-" unary | primary ;
-primary        := literal | IDENT | call | index | "(" expr ")" ;
-```
-(Full grammar finalized in `docs/grammar.ebnf` before Phase 2 begins — per your existing "design before code" rule.)
-
----
-
-## 6. Type System Design
-
-- **Type interface**: every type (`IntType`, `FloatType`, `ListType{Elem}`, `FuncType{Params,Return}`, etc.) implements a common `Type` interface with `String()` and `Equals()`.
-- **Inference algorithm**: local, statement-by-statement inference (not full Hindley-Milner — deliberately simpler, since PyGo doesn't need polymorphism). Each `x = expr` infers `expr`'s type and binds it in the symbol table.
-- **Type rules matrix** (defined explicitly, e.g.):
-```text
-int + int   → int
-float + float → float
-int + float → float   (implicit widening)
-int / int   → float    (true division, like Python)
-int // int  → int      (floor division)
-string + string → string  (concatenation)
-```
-- **Type errors** are semantic errors, reported with source spans, not panics.
-
----
-
-## 7. Symbol Table & Scoping
-
-- **Scope chain**: global scope → function scope → block scope (if/while/for don't introduce new *variable* scopes in Python semantics — only functions do; this must be modeled correctly).
-- Each `Scope` has a parent pointer; lookups walk up the chain.
-- Function scopes track: parameters, locals, return type, whether all paths return (for `-> T` functions).
-- Symbol table entries store: name, type, declared-at span, mutability info (for closures).
-
----
-
-## 8. IR Design — Three-Address Code + CFG
-
-**Why TAC + CFG instead of a flat instruction list:** basic blocks are what make real optimizations (dead-code elimination, CSE) tractable — you need "does this value get used before it's redefined" reasoning, which requires block/edge structure, not just a linear list.
-
-```text
-Instruction forms:
-  t1 = a + b
-  t2 = t1 * c
-  if t2 goto L1 else L2
-  L1:
-  x = t2
-  goto L3
-  L2:
-  ...
-```
-
-- `BasicBlock`: list of instructions + successor/predecessor edges.
-- `CFG`: entry block, exit block(s), full block graph per function.
-- IR builder walks the typed AST and lowers each construct (if/while/for/function-call) into blocks + jumps — this is one of the richest teaching moments in the whole project (control flow → graph structure).
-
----
-
-## 9. Optimization Passes (in pipeline order)
-
-1. **Constant folding** — `2 + 3` → `5` at compile time.
-2. **Constant propagation** — replace uses of a known-constant variable with the constant.
-3. **Algebraic simplification** — `x * 1 → x`, `x + 0 → x`, `x * 0 → 0`.
-4. **Common subexpression elimination (CSE)** — reuse a previously computed value instead of recomputing.
-5. **Dead-code elimination** — remove instructions/blocks whose results are never used or are unreachable.
-6. *(Stretch)* **Loop-invariant code motion** — hoist computations that don't change across loop iterations.
-
-Each pass is its own file/function, takes a CFG in, returns a (possibly changed) CFG out, and is independently unit-testable with "before IR / after IR" fixtures — this is what `pygoc optimize` will show side-by-side.
-
----
-
-## 10. Code Generation Strategy
-
-- Walk the optimized CFG per function, emit Go source using a `text/template`-free, direct string-builder approach (easier to debug than templates for a first version).
-- **Auto-import resolution**: `codegen/imports.go` tracks which stdlib packages were actually used (`fmt`, `strconv`, `strings`, `math`, `sort`, `bufio`) and emits only those import lines.
-- **Runtime representation choices** (documented explicitly, since this is a real design decision):
-  - PyGo `list<T>` → Go slice `[]T`
-  - PyGo `dict<K,V>` → Go `map[K]V`
-  - PyGo `tuple<...>` → Go struct or multiple return values, depending on context
-- Generated Go must be `gofmt`-clean and pass `go vet` — this is itself a test.
-
----
-
-## 11. Diagnostics & Error Recovery
-
-- Every phase reports errors through one shared `diagnostics.Reporter`, not ad-hoc `fmt.Println`.
-- Errors carry: source file, line, column, span, severity, message, and (where possible) a suggested fix.
-- **Panic-mode recovery in the parser**: on a syntax error, skip tokens until the next statement boundary (NEWLINE at the right indent level) and keep parsing — so one `pygoc compile` run can report *all* syntax errors in a file, not just the first. This is a legitimate, well-known compiler-design technique worth a full viva section.
-
----
-
-## 12. CLI Design
+Planned CLI (built out phase-by-phase, see roadmap):
 
 ```bash
 pygoc lex file.py        # print token stream
-pygoc ast file.py        # print AST
+pygoc ast file.py        # print parsed AST
 pygoc sema file.py       # print symbol table + inferred types
 pygoc ir file.py         # print unoptimized IR/CFG
-pygoc optimize file.py   # print optimized IR/CFG (before/after diff)
+pygoc optimize file.py   # print optimized IR/CFG (before/after)
 pygoc compile file.py    # emit Go source
-pygoc run file.py        # compile + go run, single command
-pygoc check file.py      # semantic check only, no codegen (like a linter)
+pygoc run file.py        # compile + go run in one step
+pygoc check file.py      # semantic check only (like a linter)
 ```
-Every debug command is essentially a partial pipeline run stopped early and printed — reinforcing the "each phase is independently inspectable" design goal.
+
+Every debug command is a partial pipeline run stopped early and printed — reflecting the same "each phase is independently inspectable" principle the architecture is built on.
 
 ---
 
-## 13. Testing Strategy
+## Current Status
 
-| Layer | What's tested | How |
+| Phase | Package | Status |
 |---|---|---|
-| Lexer | tokens, indentation edge cases, invalid chars | table-driven unit tests |
-| Parser | grammar rules, precedence, malformed syntax, recovery | unit tests + fuzz-style malformed inputs |
-| Semantic | undefined vars, scope errors, type mismatches, bad returns | unit tests with expected diagnostics |
-| IR | AST → CFG correctness | golden IR-dump comparisons |
-| Optimizer | before/after IR per pass, combined pipeline | golden before/after fixtures |
-| Codegen | generated Go compiles + `go vet` clean | golden `.go` file comparisons |
-| End-to-end | compile + execute + check stdout | `tests/e2e/*.py` + expected output |
-| Benchmarks | timing per phase on representative programs | `go test -bench` |
+| 1. Lexer | `internal/token`, `internal/lexer` | ✅ Implemented — indentation handling, all literals/operators, error recovery, 16-case test suite |
+| 2. Parser | `internal/ast`, `internal/parser` | ⏳ Next up |
+| 3a. Symbol Table | `internal/symbol` | ☐ Not started |
+| 3b. Type System | `internal/types` | ☐ Not started |
+| 3c. Semantic Analysis | `internal/semantic` | ☐ Not started |
+| 4. IR (TAC + CFG) | `internal/ir` | ☐ Not started |
+| 5. Optimizer | `internal/optimizer` | ☐ Not started |
+| 6. Code Generator | `internal/codegen` | ☐ Not started |
+| CLI | `cmd/pygoc` | ☐ Not started |
 
-Golden test format:
-```text
-tests/golden/factorial.py
-tests/golden/factorial.expected.go
-tests/e2e/factorial.py
-tests/e2e/factorial.expected.txt
-```
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full phase-by-phase plan, timeline, and design rationale behind every decision.
 
 ---
 
-## 14. Semester Timeline & Milestones
+## Scope Decisions
 
-```text
-Week 1-2   Phase 0: language spec, grammar, architecture doc (no code)
-Week 3-4   v0.1  Lexer + indentation handling, full test suite
-Week 5-6   v0.2  Parser (recursive descent) + error recovery
-Week 6     v0.3  AST module + pretty printer
-Week 7-8   v0.4  Symbol table + scoping
-Week 8-9   v0.5  Type system + inference + semantic analysis
-Week 10    v0.6  IR (TAC) + CFG builder
-Week 11    v0.7  Optimizer passes (start with constant folding, add incrementally)
-Week 12-13 v0.8  Code generator + stdlib mapping
-Week 13    v0.9  CLI polish, all debug commands working
-Week 14    v1.0  End-to-end tests, golden tests, benchmarks, docs
-Week 15    Buffer: report writing, viva prep, README polish
-```
+Every exclusion below was a deliberate tradeoff, not a limitation discovered late:
 
-**Hard rule (yours, and a good one):** correctness and architecture come before advanced features. If week 11 arrives and the optimizer isn't started, cut list comprehensions/ternary before cutting CSE — core pipeline completeness beats feature count.
-
----
-
-## 15. Risks & How to Avoid Scope Creep
-
-| Risk | Mitigation |
+| Excluded | Why |
 |---|---|
-| Indentation lexer eats too much time | Timebox to 1.5 weeks; reference Python's public tokenizer algorithm rather than inventing your own |
-| Closures spiral into full lexical-scope complexity | Hard rule: read-only capture only, enforced by a semantic check that rejects reassignment of captured vars |
-| Optimizer becomes "just constant folding" | Each pass gets its own week slot in the timeline, not "later" |
-| Codegen becomes string-spaghetti | One function per AST/IR node type, tested independently |
-| Report/documentation left to the last week | Write `docs/*.md` incrementally, one per completed phase, not all at the end |
+| Classes / OOP | Would require a whole method-dispatch and inheritance model — out of scope for a semester |
+| Exceptions (`try/except`) | Needs unwind semantics threaded through the entire IR and codegen layer |
+| Generators / `yield` | Requires coroutine-style state machines in codegen — a project on its own |
+| Full dynamic typing | Defeats the point of static type inference, PyGoC's core teaching value |
+| Closures with mutation | Restricted to **read-only capture** — keeps scoping tractable without losing the "functions as values" flavor |
+| Imports / modules | Single-file compilation keeps the symbol table design simple |
 
 ---
 
-## 16. Final Deliverables Checklist
+## Testing Philosophy
 
-```text
-☐ Compiler source (fully modular, per structure in §2)
-☐ CLI with all 8 debug/run commands
-☐ Language specification document
-☐ Formal grammar (EBNF)
-☐ Type system documentation
-☐ IR + CFG design documentation
-☐ Optimizer pass documentation (before/after examples)
-☐ Unit tests for every phase
-☐ Golden tests (input/output pairs)
-☐ End-to-end example programs
-☐ Benchmark suite + results
-☐ Architecture diagram
-☐ README (professional, 20-section structure)
-☐ Final project report
-☐ Viva question bank
+Every phase is tested in isolation, and the whole pipeline is tested end-to-end:
+
+- **Unit tests** per package (table-driven, one file per source file).
+- **Golden tests** — `input.py` paired with an `expected.go` (or expected IR dump), so regressions show up as an exact diff.
+- **End-to-end tests** — compile a PyGo program, actually run the resulting Go binary, and check its output.
+- **Benchmarks** — track compiler performance itself, not just correctness.
+
+Run everything with:
+
+```bash
+go test ./... -v
+go test ./... -bench=.
 ```
 
 ---
 
-## 17. CV Positioning (once actually built — only claim what's real)
+## Contributing / Working On This Yourself
 
-> **PyGoC — Python-Subset Compiler Targeting Go**
-> Designed and implemented a full compiler pipeline from lexical analysis through a CFG-based IR, multi-pass optimizer, and Go code generation. Built a hand-written recursive-descent parser with panic-mode error recovery, an indentation-sensitive lexer, a scoped symbol table, a static type inference engine, and a three-address-code IR lowered to basic blocks. Implemented constant folding, constant propagation, common subexpression elimination, algebraic simplification, and dead-code elimination as independent, composable optimization passes. Shipped as a CLI exposing every internal compiler stage for inspection, with golden-file regression tests, end-to-end execution tests, and compiler performance benchmarks.
+This project is built phase-by-phase, in order, deliberately — later phases depend on earlier ones being correct, so skipping ahead tends to produce bugs that are hard to trace back to their real cause. If you're extending it:
 
----
-
-## 18. Viva Topics (headline list — full question bank built per-phase as we go)
-
-- Why indentation-based lexing is genuinely hard (and how INDENT/DEDENT solves it)
-- Recursive descent vs. parser generators — tradeoffs
-- Why symbol tables need scope chains, not a single flat map
-- How type inference differs from type checking
-- Why TAC + CFG (basic blocks) instead of a flat IR list
-- What each optimization pass actually proves/preserves (correctness of transformations)
-- Why panic-mode error recovery matters for usability
-- Design decisions in mapping PyGo collections to Go's slice/map runtime types
-- What was deliberately excluded (classes, exceptions, generators) and why
+1. Read the relevant `docs/*.md` before touching code.
+2. Write the test cases for a feature before (or alongside) the implementation.
+3. Keep each package's dependency direction one-way (never import a "later" phase from an "earlier" one).
 
 ---
 
-## 19. What We Build First
+## License
 
-**Next immediate step:** Phase 0 is *already done* by this document, except one thing — the **finalized, word-for-word language specification and grammar** should be split into their own `docs/language-spec.md` and `docs/grammar.ebnf` files before a single line of lexer code is written, per your own rule.
-
-**Recommended first coding milestone:** `internal/lexer` — token types, then the indentation algorithm, then a full test suite — since every later phase depends on a correct token stream.
-
----
-
-*End of blueprint. Do not begin Phase 1 implementation until this document is confirmed.*
+Add your chosen license here (MIT is a common, permissive choice for a portfolio/teaching compiler).
